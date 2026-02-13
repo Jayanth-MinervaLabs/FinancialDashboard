@@ -1,6 +1,6 @@
 # main.py
 # Streamlit main page (Static V1) — robust to renamed rows / updated Excel
-# Reads newest .xlsx from ./src and renders KPIs + charts.
+# Reads newest .xlsx from ./src and renders STATIC investor header + charts from Excel.
 
 import os
 import glob
@@ -100,7 +100,7 @@ def extract_row_timeseries(df_raw: pd.DataFrame, row_label: str) -> pd.DataFrame
             raise ValueError(f"Row label not found: '{row_label}'")
         row = contains.iloc[0]
 
-    values = row.iloc[1 : 1 + len(months)]
+    values = row.iloc[1: 1 + len(months)]
     out = pd.DataFrame(
         {"month": pd.to_datetime(months), "value": pd.to_numeric(values, errors="coerce")}
     )
@@ -139,7 +139,6 @@ def build_canonical(path: str) -> Tuple[pd.DataFrame, Dict[str, str]]:
     # Master_Proforma
     master_series = {
         "revenue_total": extract_row_any(df_master, ["Revenue"]),
-        # Variable costs can be renamed; keep optional
         "variable_costs": extract_row_any(df_master, ["Variable Costs", "AI / Usage COGS", "COGS"]),
         "gross_profit": extract_row_any(df_master, ["Gross Profit"]),
         "gross_margin": extract_row_any(df_master, ["Gross Profit %", "Gross Margin %"]),
@@ -173,7 +172,7 @@ def build_canonical(path: str) -> Tuple[pd.DataFrame, Dict[str, str]]:
     df_mix_wide = merge_series_on_month(mix_series)
     df = df.merge(df_mix_wide, on="month", how="left")
 
-    # Derived metrics
+    # Derived metrics (kept for charts/table; NOT used for the investor header KPIs)
     df["burn"] = df["expenses_total"] - df["revenue_total"]
     df["paying_users_total"] = df[["paying_consumers", "business_accounts", "marketplace_sellers"]].sum(
         axis=1, min_count=1
@@ -332,6 +331,31 @@ def chart_ebitda_combo(df: pd.DataFrame) -> go.Figure:
 # Sidebar controls
 # ----------------------------
 with st.sidebar:
+    st.header("Investor Header (Static)")
+
+    cash_2026 = st.number_input(
+        "Cash in hand (2026)",
+        min_value=0.0,
+        value=4_161_250.0,
+        step=50_000.0,
+        format="%.0f",
+    )
+    cash_2027 = st.number_input(
+        "Cash in hand (2027)",
+        min_value=0.0,
+        value=19_811_813.0,
+        step=50_000.0,
+        format="%.0f",
+    )
+
+    # Static “story” tiles you can tweak fast before a meeting
+    breakeven_target = st.text_input("Breakeven target (static label)", value="Nov 2026")
+    revenue_model_label = st.text_input("Revenue model (static label)", value="Subscriptions + Marketplace")
+    primary_kpi_label = st.text_input("Primary KPI (static label)", value="MRR growth")
+    margin_focus_label = st.text_input("Margin focus (static label)", value="Gross margin expansion")
+
+    st.caption("These tiles are static info (not calculated).")
+
     st.header("Data Source")
     st.write("Place your proforma Excel file inside `./src/`.")
     min_cash_threshold = st.number_input(
@@ -358,47 +382,36 @@ st.caption(f"Loaded: `{os.path.basename(excel_path)}`")
 try:
     df, meta = build_canonical(excel_path)
 except Exception as e:
-    st.error(f"Failed to build canonical model.")
-    st.exception(e)  # show full traceback for debugging
+    st.error("Failed to build canonical model.")
+    st.exception(e)
     st.stop()
 
 
 # ----------------------------
-# KPIs
+# Static Investor Header KPIs (NOT computed)
 # ----------------------------
-def fmt_money(x: Optional[float]) -> str:
-    if x is None or pd.isna(x):
-        return "—"
+def fmt_money(x: float) -> str:
     return f"${x:,.0f}"
 
 
-df_sorted = df.dropna(subset=["month"]).sort_values("month").reset_index(drop=True)
-latest = df_sorted.iloc[-1]
-prev = df_sorted.iloc[-2] if len(df_sorted) >= 2 else latest
-
-cash = float(latest.get("cash_ending")) if pd.notna(latest.get("cash_ending")) else np.nan
-burn = float(latest.get("burn")) if pd.notna(latest.get("burn")) else np.nan
-runway = (cash / burn) if (pd.notna(cash) and pd.notna(burn) and burn > 0) else np.inf
-
-d_cash = (latest.get("cash_ending") - prev.get("cash_ending")) if pd.notna(latest.get("cash_ending")) and pd.notna(prev.get("cash_ending")) else None
-d_rev = (latest.get("revenue_total") - prev.get("revenue_total")) if pd.notna(latest.get("revenue_total")) and pd.notna(prev.get("revenue_total")) else None
-d_exp = (latest.get("expenses_total") - prev.get("expenses_total")) if pd.notna(latest.get("expenses_total")) and pd.notna(prev.get("expenses_total")) else None
-d_burn = (latest.get("burn") - prev.get("burn")) if pd.notna(latest.get("burn")) and pd.notna(prev.get("burn")) else None
-
+st.caption("**Investor snapshot (static)** — not calculated from the Excel in this view.")
 k1, k2, k3, k4, k5, k6 = st.columns(6)
-k1.metric("Cash (latest)", fmt_money(latest.get("cash_ending")), fmt_money(d_cash) if d_cash is not None else None)
-k2.metric("Revenue (latest)", fmt_money(latest.get("revenue_total")), fmt_money(d_rev) if d_rev is not None else None)
-k3.metric("Expenses (latest)", fmt_money(latest.get("expenses_total")), fmt_money(d_exp) if d_exp is not None else None)
-k4.metric("Net Burn (latest)", fmt_money(latest.get("burn")), fmt_money(d_burn) if d_burn is not None else None)
-k5.metric("Runway (est.)", "∞" if runway == np.inf else f"{runway:.1f} mo")
-k6.metric("Breakeven", meta.get("breakeven_month", "—"))
+
+k1.metric("Cash in hand (2026)", fmt_money(cash_2026))
+k2.metric("Cash in hand (2027)", fmt_money(cash_2027))
+k3.metric("Revenue model", revenue_model_label)
+k4.metric("Primary KPI", primary_kpi_label)
+k5.metric("Margin focus", margin_focus_label)
+k6.metric("Breakeven target", breakeven_target)
 
 st.divider()
 
 
 # ----------------------------
-# Render charts
+# Render charts (still driven by Excel)
 # ----------------------------
+df_sorted = df.dropna(subset=["month"]).sort_values("month").reset_index(drop=True)
+
 c1, c2 = st.columns(2)
 c1.plotly_chart(chart_cash_balance(df_sorted, min_cash=min_cash_threshold), use_container_width=True)
 c2.plotly_chart(chart_burn_vs_revenue(df_sorted), use_container_width=True)
